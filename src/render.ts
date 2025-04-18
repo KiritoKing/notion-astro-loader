@@ -1,23 +1,24 @@
-import type { HtmlElementNode, ListNode, TextNode } from '@jsdevtools/rehype-toc';
-import { toc as rehypeToc } from '@jsdevtools/rehype-toc';
-import { type Client, iteratePaginatedAPI, isFullBlock } from '@notionhq/client';
 import type { AstroIntegrationLogger, MarkdownHeading } from 'astro';
 import type { ParseDataOptions } from 'astro/loaders';
 
-import type { FileObject, NotionPageData, PageObjectResponse } from './types.js';
-import * as transformedPropertySchema from './schemas/transformed-properties.js';
-import { fileToUrl } from './format.js';
-import { type VFile } from 'vfile';
-
 // #region Processor
+import * as fse from 'fs-extra';
 import notionRehype from 'notion-rehype-k';
 import rehypeKatex from 'rehype-katex';
 import rehypeSlug from 'rehype-slug';
 import rehypeStringify from 'rehype-stringify';
 import { unified, type Plugin } from 'unified';
+import { type VFile } from 'vfile';
+
+import type { HtmlElementNode, ListNode, TextNode } from '@jsdevtools/rehype-toc';
+import { toc as rehypeToc } from '@jsdevtools/rehype-toc';
+import { isFullBlock, iteratePaginatedAPI, type Client } from '@notionhq/client';
+import { dim } from 'kleur/colors';
+
+import { fileToUrl } from './format.js';
 import { saveImageFromAWS, transformImagePathForCover } from './image.js';
-import * as fse from 'fs-extra';
 import { rehypeImages } from './rehype/rehype-images.js';
+import type { FileObject, NotionPageData, PageObjectResponse } from './types.js';
 
 const baseProcessor = unified()
   .use(notionRehype, {}) // Parse Notion blocks to rehype AST
@@ -155,13 +156,7 @@ export class NotionPageRenderer {
     public readonly imageSavePath: string,
     logger: AstroIntegrationLogger
   ) {
-    // Create a sub-logger labeled with the page name
-    const titleProp = Object.entries(page.properties).find(([_, property]) => property.type === 'title');
-    const pageTitle = transformedPropertySchema.title.safeParse(titleProp ? titleProp[1] : {});
-    this.#logger = logger.fork(`page ${page.id} (Title ${pageTitle.success ? pageTitle.data : 'unknown'})`);
-    if (!pageTitle.success) {
-      this.#logger.warn(`Failed to parse title property from page: ${pageTitle.error.toString()}`);
-    }
+    this.#logger = logger.fork(`${logger.label}/render`);
   }
 
   /**
@@ -201,23 +196,24 @@ export class NotionPageRenderer {
    * This is created once for all pages then shared.
    */
   async render(process: ReturnType<typeof buildProcessor>): Promise<RenderedNotionEntry | undefined> {
-    this.#logger.debug('Rendering');
+    this.#logger.debug('Rendering page');
+
     try {
       const blocks = await awaitAll(listBlocks(this.client, this.page.id, this.#fetchImage));
 
       if (this.#imageAnalytics.download > 0 || this.#imageAnalytics.cached > 0) {
         this.#logger.info(
           [
-            `Astro Notion Loader found `,
-            ` ${this.#imageAnalytics.download} images need to download `,
-            this.#imageAnalytics.cached > 0 ? `and ${this.#imageAnalytics.cached} images need to use cached ` : ``,
+            `Found ${this.#imageAnalytics.download} images to download`,
+            this.#imageAnalytics.cached > 0 && dim(`${this.#imageAnalytics.cached} already cached`),
           ].join(' ')
         );
       }
 
       const { vFile, headings } = await process(blocks, this.#imagePaths);
 
-      this.#logger.debug('Rendered');
+      this.#logger.debug('Rendered page');
+
       return {
         html: vFile.toString(),
         metadata: {
